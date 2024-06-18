@@ -120,13 +120,16 @@ class PsalmWriter:
             elif i > 0:
                 p = text_frame.add_paragraph()
 
-            # Join the lines with line breaks
-            paragraph_text = '\n'.join(paragraph_lines)
             self.current_text_body_height += paragraph_height
 
             # Add text to paragraph
-            run = p.add_run()
-            run.text = paragraph_text
+            for line_idx, line in enumerate(paragraph_lines):
+                run = p.add_run()
+                run.text = line
+                if line_idx < len(paragraph_lines) - 1:
+                    # Join the lines with soft line breaks:4
+                    # See https://github.com/scanny/python-pptx/issues/322#issuecomment-339607317
+                    p._p.add_br()
             # p.font.size = Pt(22)
             # p.font.color.rgb = RGBColor(255, 255, 255)  # White text color
             # p.font.name = 'Georgia'
@@ -146,7 +149,7 @@ class PsalmWriter:
         prs.save(f'Psalm_{self.psalm_number:03d}.pptx')
 
 
-standard_spacing_font_specific = 1.65  # Depending on font!
+standard_spacing_font_specific = 1.46  # Depending on font!
 spacing_factor = 1.2
 line_spacing_factor = standard_spacing_font_specific * spacing_factor
 
