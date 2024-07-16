@@ -1,13 +1,29 @@
 import re
+from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 from pptx import Presentation
 from tqdm import tqdm
 
-PRINT_ALL = True
+# If None, export all
+PSALM: Optional[int] = None
 
 superscript_lut = dict(zip((map(str, range(10))), "⁰¹²³⁴⁵⁶⁷⁸⁹"))  # From https://lingojam.com/TinyTextGenerator
+superscript_lut.update({"a": "ᵃ", "b": "ᵇ"})
+
+
+def all_after_verse_number(verse_element: Tag) -> [str, str]:
+    vn_span = verse_element.find('span', class_='vn')
+    # Extract all the text that comes after the 'vn' span
+    text_after_vn = ''
+    for element in vn_span.next_siblings:
+        if isinstance(element, str):
+            text_after_vn += element
+        elif isinstance(element, Tag):
+            text_after_vn += element.get_text()
+    return text_after_vn.strip(), vn_span.get_text()
 
 
 def grab_psalm(psalm):
@@ -31,19 +47,44 @@ def grab_psalm(psalm):
 
             # Extract the verses in their individual lines and their number
             verse_objects = []
+            search_for_verse_purpose = True
             for verse in verses:
-                verse_text_raw = verse.get_text(strip=True)
-                if not verse_text_raw[0].isdigit():
-                    # This is the first verse -- it begins with the psalms title and purpose
-                    continue
-                # Extract and remove the leading verse number
-                verse_number = re.findall(r"^\d+", verse_text_raw)[0]
-                verse_text = re.sub(r"^\d+", "", verse_text_raw)
-                # Remove trailing [sela], "/" or footnote number
+                verse_text_raw, verse_number = all_after_verse_number(verse)
+                # Preprocessing: Remove trailing [sela], "/" or footnote number
                 for _ in range(3):
                     # Repeat multiple times because footnote or sela could occur together
-                    verse_text = re.sub(r"(/$)|(\d+$)|(\[Sela])$", "", verse_text).strip()
-                verse_text = verse_text.replace("-", "—")
+                    verse_text_raw = re.sub(r"(/$)|(\d+$)|(\[Sela])|(\[Zwischenspiel. Sela])$", "",
+                                            verse_text_raw).strip()
+                # Replace break dashes (they have no character on either side)
+                verse_text_raw = re.sub(r"(?<![a-zA-Z])-(?![a-zA-Z])", "—", verse_text_raw)
+                verse_text = verse_text_raw
+                # verse text can either:
+                # 1. already contain the correct first sentence (e.g. 107)
+                # 2. contain only the psalms purpose in [ ] brackets (e.g. 85)
+                # 3. contain part of the psalms purpose, spread over multiple verses (e.g. 51)
+                # 4. contain the psalms purpose and the correct first sentence (e.g. 86)
+                if search_for_verse_purpose and verse_text.startswith("["):
+                    # Psalms purpose starting
+                    if verse_text.endswith("]"):
+                        # Psalms purpose spreads the whole current verse -> skip
+                        search_for_verse_purpose = False
+                        continue
+                    elif "]" not in verse_text:
+                        # Psalms purpose spreads more than the current verse -> skip at least this one
+                        continue
+                    else:
+                        # Psalms purpose spreads part of the current verse -> cut it out
+                        verse_text = re.sub(r"\[.+?]", "", verse_text).strip()
+                        search_for_verse_purpose = False
+                elif search_for_verse_purpose and "]" in verse_text:
+                    if verse_text.endswith("]"):
+                        # This verse ends completely with the psalms purpose -> skip it entirely
+                        search_for_verse_purpose = False
+                        continue
+                    else:
+                        # Psalms purpose continued here since last verse -> only cut the first part
+                        verse_text = re.sub(r"^.+?]", "", verse_text).strip()
+                        search_for_verse_purpose = False
 
                 verse_lines = [v.strip() for v in verse_text.split("/")]
 
@@ -149,11 +190,11 @@ class PsalmWriter:
         prs.save(f'Psalm_{self.psalm_number:03d}.pptx')
 
 
-standard_spacing_font_specific = 1.46  # Depending on font!
+standard_spacing_font_specific = 1.5  # Depending on font!
 spacing_factor = 1.2
 line_spacing_factor = standard_spacing_font_specific * spacing_factor
 
-if PRINT_ALL:
+if PSALM is None:
     for i in tqdm(list(range(1, 151))):
         try:
             prs = Presentation("Template.pptx")
@@ -164,5 +205,5 @@ if PRINT_ALL:
             raise e
 else:
     prs = Presentation("Template.pptx")
-    pw = PsalmWriter(84, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12)
+    pw = PsalmWriter(PSALM, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12)
     pw.write_psalm()
