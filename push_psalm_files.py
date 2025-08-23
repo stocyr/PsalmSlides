@@ -1,4 +1,6 @@
 import os
+import sys
+
 import requests
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -22,17 +24,26 @@ session.headers.update({
 })
 
 
+def request_with_retry(method, url, **kwargs):
+    """Helper that retries once if 401 Unauthorized is returned."""
+    resp = session.request(method, url, **kwargs)
+    if resp.status_code == 401:
+        # refresh session by forcing token header again
+        session.headers.update({"Authorization": f"Login {TOKEN}"})
+        resp = session.request(method, url, **kwargs)
+    resp.raise_for_status()
+    return resp
+
+
 def get_files():
     url = f"{BASE_URL}/files/{DOMAIN_TYPE}/{DOMAIN_IDENTIFIER}"
-    r = session.get(url)
-    r.raise_for_status()
+    r = request_with_retry("GET", url)
     return r.json()["data"]
 
 
 def delete_file(file_id):
     url = f"{BASE_URL}/files/{file_id}"
-    r = session.delete(url)
-    r.raise_for_status()
+    request_with_retry("DELETE", url)
 
 
 def upload_file(local_path, filename):
@@ -46,26 +57,46 @@ def upload_file(local_path, filename):
             "max_height": "",
             "max_width": ""
         }
-        r = session.post(url, files=files, data=data)
-        r.raise_for_status()
+        request_with_retry("POST", url, files=files, data=data)
 
 
 def main():
-    files = get_files()
-    psalm_files = [f for f in files if fnmatch.fnmatch(f["name"], "Psalm_*.pptx")]
+    try:
+        files = get_files()
+        print(f"✅ Successfully got list of {len(files)} files.")
+        psalm_files = [f for f in files if fnmatch.fnmatch(f["name"], "Psalm_*.pptx")]
+        psalm_files = sorted(psalm_files, key=lambda f: f["name"])
+        print(f"  --> {len(psalm_files)} of them are Psalm PPTX files. Now traveling through them one by one.\n")
+    except requests.HTTPError as e:
+        print(f"❌ Error getting files, quit.")
+        return
 
-    for file in tqdm(psalm_files, desc="Processing files"):
+    #for file in tqdm(psalm_files, desc="Processing files"):
+    for file in psalm_files:
+        print(f"Handling file {file['name']}")
+
         local_path = os.path.join(os.getcwd(), file["name"])
-
         if not os.path.exists(local_path):
-            print(f"⚠️ Local file not found, skipping: {file['name']}")
+            print(f"  --> ⚠️ Local file not found, skipping: {file['name']}")
             continue
 
         try:
             delete_file(file["id"])
-            upload_file(local_path, file["name"])
+            print(f"✅ Deleted remote file {file['name']}")
         except requests.HTTPError as e:
-            print(f"❌ Error processing {file['name']}: {e}")
+            print(f"  --> ❌ Error deleting {file['name']}: {e}\n  Continuing.")
+            continue
+        try:
+            upload_file(local_path, file["name"])
+            print(f"  --> ✅ Uploaded new file {file['name']}")
+        except requests.HTTPError as e:
+            # Surface server message to help debugging (e.g., 401 details)
+            msg = ""
+            try:
+                msg = f" | response: {e.response.text[:500]}"
+            except Exception:
+                pass
+            print(f" --> ❌ Error uploading {file['name']}: {e}{msg}")
 
 
 if __name__ == "__main__":
