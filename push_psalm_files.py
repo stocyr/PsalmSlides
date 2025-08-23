@@ -1,17 +1,11 @@
 import os
-import sys
-
+import fnmatch
 import requests
 from dotenv import load_dotenv
-from tqdm import tqdm
-import fnmatch
 
 # Load .env and get token
 load_dotenv()
-TOKEN = os.getenv("CHURCHTOOLS_TOKEN")
-
-if not TOKEN:
-    raise ValueError("CHURCHTOOLS_TOKEN not found in .env file")
+USER, PASSWORD = os.getenv("CHURCHTOOLS_USER"), os.getenv("CHURCHTOOLS_PASSWORD")
 
 BASE_URL = "https://feg-guemligen.church.tools/api"
 DOMAIN_TYPE = "wiki_39"
@@ -19,18 +13,40 @@ DOMAIN_IDENTIFIER = "a879e45b-192e-494f-9724-7b83ac03deb3"
 
 session = requests.Session()
 session.headers.update({
-    "Authorization": f"Login {TOKEN}",
     "accept": "application/json"
 })
 
+CSRF_TOKEN = None  # will be set after login
+
+
+def login_with_user_pw():
+    global CSRF_TOKEN
+    url = f"{BASE_URL}/login"
+    r = session.post(url, json={"username": USER, "password": PASSWORD})
+    r.raise_for_status()
+    # data = r.json()
+    # CSRF_TOKEN = data.get("csrfToken")
+    # if not CSRF_TOKEN:
+    #     raise RuntimeError("No CSRF token returned from login. Response: %s" % data)
+    # print("✅ Logged in and obtained CSRF token.")
+
 
 def request_with_retry(method, url, **kwargs):
-    """Helper that retries once if 401 Unauthorized is returned."""
-    resp = session.request(method, url, **kwargs)
+    # inject CSRF header for modifying requests
+    if method.upper() in ("POST", "DELETE", "PUT", "PATCH") and CSRF_TOKEN:
+        headers = kwargs.pop("headers", {})
+        headers["X-CSRF-Token"] = CSRF_TOKEN
+        kwargs["headers"] = headers
+
+    resp = session.request(method, url, timeout=60, **kwargs)
     if resp.status_code == 401:
-        # refresh session by forcing token header again
-        session.headers.update({"Authorization": f"Login {TOKEN}"})
-        resp = session.request(method, url, **kwargs)
+        # try re-login once
+        login_with_user_pw()
+        if method.upper() in ("POST", "DELETE", "PUT", "PATCH") and CSRF_TOKEN:
+            headers = kwargs.pop("headers", {})
+            headers["X-CSRF-Token"] = CSRF_TOKEN
+            kwargs["headers"] = headers
+        resp = session.request(method, url, timeout=60, **kwargs)
     resp.raise_for_status()
     return resp
 
@@ -62,16 +78,16 @@ def upload_file(local_path, filename):
 
 def main():
     try:
+        login_with_user_pw()
         files = get_files()
         print(f"✅ Successfully got list of {len(files)} files.")
         psalm_files = [f for f in files if fnmatch.fnmatch(f["name"], "Psalm_*.pptx")]
         psalm_files = sorted(psalm_files, key=lambda f: f["name"])
-        print(f"  --> {len(psalm_files)} of them are Psalm PPTX files. Now traveling through them one by one.\n")
+        print(f"  --> {len(psalm_files)} Psalm PPTX files found. Processing...\n")
     except requests.HTTPError as e:
-        print(f"❌ Error getting files, quit.")
+        print(f"❌ Error during login or file list: {e}")
         return
 
-    #for file in tqdm(psalm_files, desc="Processing files"):
     for file in psalm_files:
         print(f"Handling file {file['name']}")
 
@@ -86,6 +102,7 @@ def main():
         except requests.HTTPError as e:
             print(f"  --> ❌ Error deleting {file['name']}: {e}\n  Continuing.")
             continue
+
         try:
             upload_file(local_path, file["name"])
             print(f"  --> ✅ Uploaded new file {file['name']}")
@@ -96,7 +113,7 @@ def main():
                 msg = f" | response: {e.response.text[:500]}"
             except Exception:
                 pass
-            print(f" --> ❌ Error uploading {file['name']}: {e}{msg}")
+            print(f"  --> ❌ Error uploading {file['name']}: {e}{msg}")
 
 
 if __name__ == "__main__":
