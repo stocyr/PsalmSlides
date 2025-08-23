@@ -48,6 +48,8 @@ def grab_psalm(psalm):
             # Extract the verses in their individual lines and their number
             verse_objects = []
             search_for_verse_purpose = True
+
+            ps119_letter = None
             for verse in verses:
                 verse_text_raw, verse_number = all_after_verse_number(verse)
                 # Preprocessing: Remove trailing [sela], "/" or footnote number
@@ -58,6 +60,22 @@ def grab_psalm(psalm):
                 # Replace break dashes (they have no character on either side)
                 verse_text_raw = re.sub(r"(?<![a-zA-Z])-(?![a-zA-Z])", "—", verse_text_raw)
                 verse_text = verse_text_raw
+
+                # Handle parentheses and hebrew letter in ps119
+                if psalm == 119 and int(verse_number) != 1:
+                    if ps119_letter is not None:
+                        # There was a letter on the end of the last verse --> append it at the beginning here
+                       verse_text = f"({ps119_letter}) {verse_text}"
+
+                    if (match := re.findall(r"\((\w+)\)$", verse_text)) != []:
+                        ps119_letter = match[0]
+                        verse_text = verse_text.replace(f"({ps119_letter})", "").strip()
+                    else:
+                        ps119_letter = None
+
+                # Remove any parentheses except the leading ones in ps 119
+                verse_text = re.sub(r'(?<!^)\([^()]*\)', lambda m: m.group(0)[1:-1], verse_text)
+
                 # verse text can either:
                 # 1. already contain the correct first sentence (e.g. 107)
                 # 2. contain only the psalms purpose in [ ] brackets (e.g. 85)
@@ -85,7 +103,11 @@ def grab_psalm(psalm):
                         # Psalms purpose continued here since last verse -> only cut the first part
                         verse_text = re.sub(r"^.+?]", "", verse_text).strip()
                         search_for_verse_purpose = False
+                # Once the verse purpose stuff is out of the way, all other occurrences of brackets mean more text
+                # that is just not handed down as reliably --> include it but remove the brackets.
+                verse_text = verse_text.replace("[", "").replace("]", "")
 
+                # Within-verse linebreaks are marked with forward slashes
                 verse_lines = [v.strip() for v in verse_text.split("/")]
 
                 # At the first line of a verse, add the verse number in superscript
@@ -107,12 +129,13 @@ def grab_psalm(psalm):
 class PsalmWriter:
     top_margin = 0.05  # Inches
 
-    def __init__(self, psalm_number: int, prs: Presentation, body_font_size, line_spacing_factor, space_after):
+    def __init__(self, psalm_number: int, prs: Presentation, body_font_size, line_spacing_factor, space_after, wrap):
         self.psalm_number = psalm_number
         self.prs = prs
         self.body_font_size = body_font_size
         self.line_spacing_factor = line_spacing_factor
         self.space_after = space_after
+        self.warp = wrap
         self.width_inch = prs.slide_width.inches
         self.height_inch = prs.slide_height.inches
         self.current_text_body_height = 0
@@ -151,6 +174,9 @@ class PsalmWriter:
         for i, paragraph_lines in enumerate(self.verses):
             # Calculate if verse still fits on slide
             num_lines = len(paragraph_lines)
+            # Hotfix for line wrapping for very long lines (e.g. Ps 59,14 or Ps 145,13)
+            wrapped_lines = sum([len(paragraph_line) > self.warp for paragraph_line in paragraph_lines])
+            num_lines += wrapped_lines
             paragraph_height = (num_lines - 1) * self.point_to_inch(line_spacing_factor=self.line_spacing_factor)
             paragraph_height += self.point_to_inch(line_spacing_factor=1.0, after=self.space_after)
             if text_frame._parent.top.inches + self.top_margin + self.current_text_body_height + paragraph_height > self.height_inch:
@@ -198,12 +224,13 @@ if PSALM is None:
     for i in tqdm(list(range(1, 151))):
         try:
             prs = Presentation("Template.pptx")
-            pw = PsalmWriter(i, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12)
+            pw = PsalmWriter(i, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12,
+                             wrap=89)
             pw.write_psalm()
         except Exception as e:
             print(f"Error while writing psalm {i}:\n")
             raise e
 else:
     prs = Presentation("Template.pptx")
-    pw = PsalmWriter(PSALM, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12)
+    pw = PsalmWriter(PSALM, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12, wrap=89)
     pw.write_psalm()
