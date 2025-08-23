@@ -38,8 +38,15 @@ def delete_file(file_id):
 def upload_file(local_path, filename):
     url = f"{BASE_URL}/files/{DOMAIN_TYPE}/{DOMAIN_IDENTIFIER}"
     with open(local_path, "rb") as f:
-        files = {"file": (filename, f)}
-        r = session.post(url, files=files)
+        files = {
+            "files[]": (filename, f, "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        }
+        data = {
+            "image_options": "{}",
+            "max_height": "",
+            "max_width": ""
+        }
+        r = session.post(url, files=files, data=data)
         r.raise_for_status()
 
 
