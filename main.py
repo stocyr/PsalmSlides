@@ -131,13 +131,15 @@ def grab_psalm(psalm):
 class PsalmWriter:
     top_margin = 0.05  # Inches
 
-    def __init__(self, psalm_number: int, prs: Presentation, body_font_size, line_spacing_factor, space_after, wrap):
+    def __init__(self, psalm_number: int, prs: Presentation, body_font_size, line_spacing_factor, space_after, wrap,
+                 two_line):
         self.psalm_number = psalm_number
         self.prs = prs
         self.body_font_size = body_font_size
         self.line_spacing_factor = line_spacing_factor
         self.space_after = space_after
         self.warp = wrap
+        self.two_line = two_line
         self.width_inch = prs.slide_width.inches
         self.height_inch = prs.slide_height.inches
         self.current_text_body_height = 0
@@ -158,10 +160,23 @@ class PsalmWriter:
         return text_frame, text_frame.paragraphs[0]
 
     @staticmethod
+    def get_footer_frame(slide, is_title_slide=False):
+        # Get the footer text element:
+        # This is the third element in the title slide master, otherwise the second element
+        text_frame = list(slide.placeholders)[1 + int(is_title_slide)].text_frame
+
+        return text_frame, text_frame.paragraphs[0]
+
+    @staticmethod
     def fill_title(slide, title):
         # Fill in the title text element
         title_text_frame = slide.placeholders[0].text_frame
         title_text_frame.text = title
+
+    def fill_footer(self, slide, psalm_title, is_title_slide=False):
+        # Fill in the psalm title in the footer text element
+        footer_text_frame, _ = self.get_footer_frame(slide, is_title_slide)
+        footer_text_frame.text = psalm_title
 
     def point_to_inch(self, line_spacing_factor=1.0, after=0.0, point_to_pixel=1.33, dpi=96):
         pixels = (self.body_font_size * line_spacing_factor + after) * point_to_pixel
@@ -170,26 +185,36 @@ class PsalmWriter:
     def write_psalm(self):
         slide = self.add_slide(title_slide=True)
         self.fill_title(slide, f"Psalm {self.psalm_number}")
+        if self.two_line:
+            self.fill_footer(slide, f"Psalm {self.psalm_number}", is_title_slide=True)
         text_frame, p = self.get_text_frame(slide, is_title_slide=True)
         self.current_text_body_height = 0
 
         for i, paragraph_lines in enumerate(self.verses):
-            # Calculate if verse still fits on slide
-            num_lines = len(paragraph_lines)
-            # Hotfix for line wrapping for very long lines (e.g. Ps 59,14 or Ps 145,13)
-            wrapped_lines = sum([len(paragraph_line) > self.warp for paragraph_line in paragraph_lines])
-            num_lines += wrapped_lines
-            paragraph_height = (num_lines - 1) * self.point_to_inch(line_spacing_factor=self.line_spacing_factor)
-            paragraph_height += self.point_to_inch(line_spacing_factor=1.0, after=self.space_after)
-            if text_frame._parent.top.inches + self.top_margin + self.current_text_body_height + paragraph_height > self.height_inch:
-                # Add a slide with only a body text element
-                slide = self.add_slide(title_slide=False)
-                self.current_text_body_height = 0
-                text_frame, p = self.get_text_frame(slide, is_title_slide=True)
-            elif i > 0:
-                p = text_frame.add_paragraph()
-
-            self.current_text_body_height += paragraph_height
+            if not self.two_line:
+                # Calculate if verse still fits on slide
+                num_lines = len(paragraph_lines)
+                # Hotfix for line wrapping for very long lines (e.g. Ps 59,14 or Ps 145,13)
+                wrapped_lines = sum([len(paragraph_line) > self.warp for paragraph_line in paragraph_lines])
+                num_lines += wrapped_lines
+                paragraph_height = (num_lines - 1) * self.point_to_inch(line_spacing_factor=self.line_spacing_factor)
+                paragraph_height += self.point_to_inch(line_spacing_factor=1.0, after=self.space_after)
+                if text_frame._parent.top.inches + self.top_margin + self.current_text_body_height + paragraph_height > self.height_inch:
+                    # Add a slide with only a body text element
+                    slide = self.add_slide(title_slide=False)
+                    self.current_text_body_height = 0
+                    text_frame, p = self.get_text_frame(slide, is_title_slide=True)
+                elif i > 0:
+                    p = text_frame.add_paragraph()
+                self.current_text_body_height += paragraph_height
+            else:
+                # Much simpler version: just add a slide every two verses
+                if i != 0 and i % 2 == 0:
+                    slide = self.add_slide(title_slide=False)
+                    self.fill_footer(slide, f"Psalm {self.psalm_number}", is_title_slide=False)
+                    text_frame, p = self.get_text_frame(slide, is_title_slide=True)
+                elif i > 0:
+                    p = text_frame.add_paragraph()
 
             # Add text to paragraph
             for line_idx, line in enumerate(paragraph_lines):
@@ -219,10 +244,10 @@ class PsalmWriter:
         self.prs.save(f'Psalm_{self.psalm_number:03d}.pptx')
 
 
-def process_psalm(psalm: int, body_font_size, line_spacing_factor, space_after, wrap):
+def process_psalm(psalm: int, body_font_size, line_spacing_factor, space_after, wrap, two_line):
     try:
         prs = Presentation("Template.pptx")
-        pw = PsalmWriter(psalm, prs, body_font_size, line_spacing_factor, space_after, wrap)
+        pw = PsalmWriter(psalm, prs, body_font_size, line_spacing_factor, space_after, wrap, two_line)
         pw.write_psalm()
     except Exception as e:
         print(f"Error while writing psalm {psalm}:\n")
@@ -233,8 +258,10 @@ if __name__ == "__main__":
     standard_spacing_font_specific = 1.5  # Depending on font!
     spacing_factor = 1.2
     line_spacing_factor = standard_spacing_font_specific * spacing_factor
+    two_line = True
 
-    func = partial(process_psalm, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12, wrap=89)
+    func = partial(process_psalm, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12, wrap=89,
+                   two_line=two_line)
 
     if PSALM is None:
         # Use process_map for multiprocessing with a progress bar
@@ -242,5 +269,5 @@ if __name__ == "__main__":
     else:
         prs = Presentation("Template.pptx")
         pw = PsalmWriter(PSALM, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12,
-                         wrap=89)
+                         wrap=89, two_line=two_line)
         pw.write_psalm()
