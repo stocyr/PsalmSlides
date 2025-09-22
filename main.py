@@ -1,11 +1,13 @@
 import re
+from functools import partial
+from multiprocessing import cpu_count
 from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pptx import Presentation
-from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
 
 # If None, export all
 PSALM: Optional[int] = None
@@ -65,7 +67,7 @@ def grab_psalm(psalm):
                 if psalm == 119 and int(verse_number) != 1:
                     if ps119_letter is not None:
                         # There was a letter on the end of the last verse --> append it at the beginning here
-                       verse_text = f"({ps119_letter}) {verse_text}"
+                        verse_text = f"({ps119_letter}) {verse_text}"
 
                     if (match := re.findall(r"\((\w+)\)$", verse_text)) != []:
                         ps119_letter = match[0]
@@ -208,29 +210,37 @@ class PsalmWriter:
 
             if i == len(self.verses) - 1:
                 # At the last verse, append " - Halleluja" in italic
-                halleluja_run = p.add_run()
-                halleluja_run.font.italic = True
-                halleluja_run.text = " — Halleluja!"
+                if not self.verses[i][-1].endswith("Halleluja!"):
+                    halleluja_run = p.add_run()
+                    halleluja_run.font.italic = True
+                    halleluja_run.text = " — Halleluja!"
 
         # Save the presentation
-        prs.save(f'Psalm_{self.psalm_number:03d}.pptx')
+        self.prs.save(f'Psalm_{self.psalm_number:03d}.pptx')
 
 
-standard_spacing_font_specific = 1.5  # Depending on font!
-spacing_factor = 1.2
-line_spacing_factor = standard_spacing_font_specific * spacing_factor
+def process_psalm(psalm: int, body_font_size, line_spacing_factor, space_after, wrap):
+    try:
+        prs = Presentation("Template.pptx")
+        pw = PsalmWriter(psalm, prs, body_font_size, line_spacing_factor, space_after, wrap)
+        pw.write_psalm()
+    except Exception as e:
+        print(f"Error while writing psalm {psalm}:\n")
+        raise e
 
-if PSALM is None:
-    for i in tqdm(list(range(1, 151))):
-        try:
-            prs = Presentation("Template.pptx")
-            pw = PsalmWriter(i, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12,
-                             wrap=89)
-            pw.write_psalm()
-        except Exception as e:
-            print(f"Error while writing psalm {i}:\n")
-            raise e
-else:
-    prs = Presentation("Template.pptx")
-    pw = PsalmWriter(PSALM, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12, wrap=89)
-    pw.write_psalm()
+
+if __name__ == "__main__":
+    standard_spacing_font_specific = 1.5  # Depending on font!
+    spacing_factor = 1.2
+    line_spacing_factor = standard_spacing_font_specific * spacing_factor
+
+    func = partial(process_psalm, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12, wrap=89)
+
+    if PSALM is None:
+        # Use process_map for multiprocessing with a progress bar
+        results = process_map(func, range(1, 151), max_workers=cpu_count(), chunksize=1)
+    else:
+        prs = Presentation("Template.pptx")
+        pw = PsalmWriter(PSALM, prs, body_font_size=23, line_spacing_factor=line_spacing_factor, space_after=12,
+                         wrap=89)
+        pw.write_psalm()
